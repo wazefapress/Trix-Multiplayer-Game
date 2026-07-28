@@ -11,29 +11,20 @@ const io = new Server(server, {
     }
 });
 
-// قراءة ملفات الواجهة من نفس المجلد الحالي مباشرة
-app.use(express.static(__dirname));
-
 const rooms = {};
 
 io.on('connection', (socket) => {
-    console.log(`مستخدم متصل: ${socket.id}`);
-
-    function generateRoomCode() {
-        return Math.random().toString(36).substring(2, 7).toUpperCase();
-    }
+    console.log('مستخدم متصل:', socket.id);
 
     socket.on('create-room', (playerName) => {
-        const roomCode = generateRoomCode();
+        const roomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
         rooms[roomCode] = {
-            host: socket.id,
             players: [{ id: socket.id, name: playerName, seat: 0 }],
             status: 'waiting'
         };
         socket.join(roomCode);
-        socket.roomCode = roomCode;
-        socket.seat = 0;
         socket.emit('room-created', { roomCode, seat: 0 });
+        io.to(roomCode).emit('update-players', rooms[roomCode].players);
     });
 
     socket.on('join-room', ({ roomCode, playerName }) => {
@@ -43,19 +34,13 @@ io.on('connection', (socket) => {
             return;
         }
         if (room.players.length >= 4) {
-            socket.emit('error-msg', 'الغرفة ممتلئة (4 لاعبين كحد أقصى)!');
-            return;
-        }
-        if (room.status !== 'waiting') {
-            socket.emit('error-msg', 'اللعبة قد بدأت بالفعل!');
+            socket.emit('error-msg', 'الغرفة ممتلئة بالفعل!');
             return;
         }
 
         const seat = room.players.length;
-        room.players.push({ id: socket.id, name: playerName, seat: seat });
+        room.players.push({ id: socket.id, name: playerName, seat });
         socket.join(roomCode);
-        socket.roomCode = roomCode;
-        socket.seat = seat;
 
         socket.emit('room-joined', { roomCode, seat, players: room.players });
         io.to(roomCode).emit('update-players', room.players);
@@ -71,12 +56,12 @@ io.on('connection', (socket) => {
     });
 
     socket.on('select-contract', ({ roomCode, contract, kingdomOwner }) => {
-        io.to(roomCode).emit('contract-selected', { contract, kingdomOwner });
+        socket.to(roomCode).emit('contract-selected', { contract, kingdomOwner });
     });
 
     socket.on('disconnect', () => {
-        const roomCode = socket.roomCode;
-        if (roomCode && rooms[roomCode]) {
+        console.log('قطع الاتصال:', socket.id);
+        for (const roomCode in rooms) {
             rooms[roomCode].players = rooms[roomCode].players.filter(p => p.id !== socket.id);
             if (rooms[roomCode].players.length === 0) {
                 delete rooms[roomCode];
@@ -84,11 +69,10 @@ io.on('connection', (socket) => {
                 io.to(roomCode).emit('update-players', rooms[roomCode].players);
             }
         }
-        console.log(`مستخدم غادر: ${socket.id}`);
     });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
-    console.log(`السيرفر يعمل على المنفذ ${PORT}`);
+    console.log(`السيرفر يعمل بنجاح على المنفذ ${PORT}`);
 });
