@@ -56,14 +56,23 @@ io.on('connection', (socket) => {
         socket.to(roomCode).emit('card-played', { card, playerIdx, nextTurn });
     });
 
-    // تمرير الدور عند عدم توفر أوراق صالحة أو انتهاء أوراق اللاعب
+    // تمرير الدور التلقائي عند عدم توفر أوراق صالحة أو انتهاء أوراق اللاعب
     socket.on('pass-turn', ({ roomCode, nextTurn }) => {
         socket.to(roomCode).emit('turn-passed', { nextTurn });
     });
 
-    // اختيار عقد اللعب (تركس، شيخ الكبة، بنات، إلخ)
+    // اختيار عقد اللعب
     socket.on('select-contract', ({ roomCode, contract, kingdomOwner }) => {
         io.to(roomCode).emit('contract-selected', { contract, kingdomOwner });
+    });
+
+    // إشارة نهاية الجولة ونقل النتائج وتحديث الحالة لباقي اللاعبين
+    socket.on('round-ended', ({ roomCode, gameState }) => {
+        if (rooms[roomCode]) {
+            rooms[roomCode].gameState = gameState;
+        }
+        // إرسال لجميع من في الغرفة عدا المُرسل
+        socket.to(roomCode).emit('round-ended-sync', { gameState });
     });
 
     // إشارة بداية جولة جديدة
@@ -72,6 +81,14 @@ io.on('connection', (socket) => {
             rooms[roomCode].gameState = gameState;
         }
         io.to(roomCode).emit('round-started', gameState);
+    });
+
+    // استقبال وإرسال رسائل الشات
+    socket.on('send-chat-message', ({ roomCode, message, senderName }) => {
+        socket.to(roomCode).emit('receive-chat-message', {
+            sender: senderName,
+            text: message
+        });
     });
 
     // التعامل مع قطع الاتصال
@@ -92,7 +109,7 @@ io.on('connection', (socket) => {
     });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
     console.log(`سيرفر التركس يعمل بنجاح على المنفذ ${PORT}`);
 });
