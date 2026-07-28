@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
@@ -10,6 +11,9 @@ const io = new Server(server, {
         methods: ["GET", "POST"]
     }
 });
+
+// خدمة ملفات الواجهة الساكنة (index.html) تلقائياً
+app.use(express.static(__dirname));
 
 const rooms = {};
 
@@ -57,6 +61,14 @@ io.on('connection', (socket) => {
 
     socket.on('select-contract', ({ roomCode, contract, kingdomOwner }) => {
         socket.to(roomCode).emit('contract-selected', { contract, kingdomOwner });
+    });
+
+    // استقبال رسائل المحادثة وبثها للاعبين الآخرين في نفس الغرفة
+    socket.on('send-chat-message', ({ roomCode, message, senderName }) => {
+        socket.to(roomCode).emit('receive-chat-message', {
+            sender: senderName || 'لاعب',
+            text: message
+        });
     });
 
     socket.on('disconnect', () => {
