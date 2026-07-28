@@ -24,3 +24,5 @@ Node.js: بيئة تشغيل جافاسكربت على الخادم.
 Express.js: إطار عمل خفيف لإدارة مسارات الخادم الأساسية.
 
 Socket.io: لإدارة الغرف، استقبال أحداث اللعب من اللاعبين وتوزيعها بشكل فورى (Real-time multiplayer).
+## رابط اللعبة 🎮 
+https://trix-online.haythamzeidan.workers.dev/
