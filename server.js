@@ -36,8 +36,10 @@ function shuffle(deck) {
 }
 
 io.on('connection', (socket) => {
-    socket.on('create-room', (playerName) => {
+    socket.on('create-room', (data) => {
+        // توليد الكود
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+        
         rooms[roomId] = {
             players: {},
             playerOrder: [],
@@ -53,10 +55,13 @@ io.on('connection', (socket) => {
             doubledCards: {},
             gameState: 'waiting'
         };
-        joinRoom(socket, roomId, playerName);
-        socket.emit('room-created', roomId);
-    });
 
+        // تسجيل اللاعب
+        joinRoom(socket, roomId, data.playerName, data.playerId);
+        
+        // إرسال الكود للمتصفح ككائن JSON صريح
+        socket.emit('room-created', { roomId: roomId });
+    });
     socket.on('join-room', (data) => {
         const { roomId, playerName, playerId } = data;
         const room = rooms[roomId];
