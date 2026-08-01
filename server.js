@@ -96,7 +96,7 @@ io.on('connection', (socket) => {
 
         io.to(roomId).emit('lobby-updated', Object.values(room.players).map(p => p.name));
 
-        if (room.playerOrder.length === 4) {
+        if (room.playerOrder.length === 1) {
             room.gameState = 'playing';
             io.to(roomId).emit('game-ready');
             startNewRound(roomId);
