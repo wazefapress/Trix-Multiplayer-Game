@@ -1,21 +1,27 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
 
-// توجيه الملفات الأمامية بشكل صريح وآمن من نفس المجلد
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-app.get('/style.css', (req, res) => res.sendFile(path.join(__dirname, 'style.css')));
-app.get('/client.js', (req, res) => res.sendFile(path.join(__dirname, 'client.js')));
+// رسالة بسيطة للتأكد من عمل السيرفر عند زيارة رابطه المباشر
+app.get('/', (req, res) => {
+    res.send('Trix Multiplayer Game Server is Running on Render!');
+});
+
+// إعداد السوكيت مع تفعيل CORS للسماح لـ Cloudflare بالاتصال
+const io = new Server(server, {
+    cors: {
+        origin: "*", 
+        methods: ["GET", "POST"]
+    }
+});
 
 const PORT = process.env.PORT || 3000;
 const rooms = {};
 
-// توليد الأوراق
+// توليد أوراق اللعب
 const suits = ['♥', '♦', '♣', '♠'];
 function generateDeck() {
     let deck = [];
@@ -36,8 +42,10 @@ function shuffle(deck) {
 }
 
 io.on('connection', (socket) => {
+    
+    // إنشاء غرفة
     socket.on('create-room', (data) => {
-        // توليد الكود
+        const { playerName, playerId } = data;
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
         
         rooms[roomId] = {
@@ -56,24 +64,28 @@ io.on('connection', (socket) => {
             gameState: 'waiting'
         };
 
-        // تسجيل اللاعب
-        joinRoom(socket, roomId, data.playerName, data.playerId);
-        
-        // إرسال الكود للمتصفح ككائن JSON صريح
+        joinRoom(socket, roomId, playerName, playerId);
         socket.emit('room-created', { roomId: roomId });
     });
+
+    // الانضمام لغرفة
     socket.on('join-room', (data) => {
         const { roomId, playerName, playerId } = data;
         const room = rooms[roomId];
         
-        if (!room) return socket.emit('error', 'الغرفة غير موجودة');
+        if (!room) return socket.emit('error', 'الغرفة غير موجودة. تأكد من الكود.');
         
-        // إعادة الاتصال
+        // إعادة الاتصال في حال تحديث الصفحة
         if (room.players[playerId]) {
             room.players[playerId].socketId = socket.id;
             socket.join(roomId);
+            
+            if (room.gameState === 'playing') {
+                socket.emit('game-ready');
+            }
+
             socket.emit('sync-game-state', {
-                hands: room.hands[playerId],
+                hands: room.hands[playerId] || [],
                 scores: room.scores,
                 activeContract: room.activeContract,
                 currentTrick: room.currentTrick
@@ -81,13 +93,13 @@ io.on('connection', (socket) => {
             return;
         }
 
-        if (Object.keys(room.players).length >= 4) return socket.emit('error', 'الغرفة ممتلئة');
+        if (Object.keys(room.players).length >= 4) return socket.emit('error', 'عذراً، الغرفة ممتلئة (4 لاعبين).');
         
         socket.playerId = playerId;
         joinRoom(socket, roomId, playerName, playerId);
     });
 
-    function joinRoom(socket, roomId, playerName, playerId = socket.id) {
+    function joinRoom(socket, roomId, playerName, playerId) {
         const room = rooms[roomId];
         room.players[playerId] = { id: playerId, name: playerName, socketId: socket.id };
         room.playerOrder.push(playerId);
@@ -96,7 +108,7 @@ io.on('connection', (socket) => {
 
         io.to(roomId).emit('lobby-updated', Object.values(room.players).map(p => p.name));
 
-        if (room.playerOrder.length === 1) {
+        if (room.playerOrder.length === 4) {
             room.gameState = 'playing';
             io.to(roomId).emit('game-ready');
             startNewRound(roomId);
@@ -127,7 +139,7 @@ io.on('connection', (socket) => {
         room.playedContracts.push(contract);
         room.currentTurnIndex = room.kingIndex;
         
-        if (doubled) room.doubledCards = doubled; // تسجيل التدبيل إن وجد
+        if (doubled) room.doubledCards = doubled;
 
         io.to(roomId).emit('contract-started', contract);
         io.to(roomId).emit('update-turn', room.playerOrder[room.currentTurnIndex]);
