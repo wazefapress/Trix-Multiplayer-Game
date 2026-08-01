@@ -33,6 +33,7 @@ function generateDeck() {
     return deck;
 }
 
+// خلط الأوراق
 function shuffle(deck) {
     for (let i = deck.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -43,11 +44,12 @@ function shuffle(deck) {
 
 io.on('connection', (socket) => {
     
-    // إنشاء غرفة
+    // حدث إنشاء غرفة جديدة
     socket.on('create-room', (data) => {
         const { playerName, playerId } = data;
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
         
+        // تجهيز بيانات الغرفة
         rooms[roomId] = {
             players: {},
             playerOrder: [],
@@ -61,14 +63,14 @@ io.on('connection', (socket) => {
             activeContract: null,
             currentTurnIndex: 0,
             doubledCards: {},
-            gameState: 'waiting'
+            gameState: 'waiting' // حالة اللعبة: بانتظار اكتمال العدد
         };
 
         joinRoom(socket, roomId, playerName, playerId);
         socket.emit('room-created', { roomId: roomId });
     });
 
-    // الانضمام لغرفة
+    // حدث الانضمام لغرفة
     socket.on('join-room', (data) => {
         const { roomId, playerName, playerId } = data;
         const room = rooms[roomId];
@@ -80,16 +82,20 @@ io.on('connection', (socket) => {
             room.players[playerId].socketId = socket.id;
             socket.join(roomId);
             
+            // نرسله لشاشة اللعب أو الانتظار مجدداً
+            socket.emit('joined-successfully', { roomId: roomId });
+            socket.emit('lobby-updated', Object.values(room.players).map(p => p.name));
+            
+            // إذا كانت اللعبة جارية بالفعل، نعيد إرسال الأوراق وحالة اللعب
             if (room.gameState === 'playing') {
                 socket.emit('game-ready');
+                socket.emit('sync-game-state', {
+                    hands: room.hands[playerId] || [],
+                    scores: room.scores,
+                    activeContract: room.activeContract,
+                    currentTrick: room.currentTrick
+                });
             }
-
-            socket.emit('sync-game-state', {
-                hands: room.hands[playerId] || [],
-                scores: room.scores,
-                activeContract: room.activeContract,
-                currentTrick: room.currentTrick
-            });
             return;
         }
 
@@ -99,6 +105,7 @@ io.on('connection', (socket) => {
         joinRoom(socket, roomId, playerName, playerId);
     });
 
+    // الدالة المسؤولة عن إضافة اللاعب وإدارة حالة الغرفة
     function joinRoom(socket, roomId, playerName, playerId) {
         const room = rooms[roomId];
         room.players[playerId] = { id: playerId, name: playerName, socketId: socket.id };
@@ -106,38 +113,47 @@ io.on('connection', (socket) => {
         room.totalScores[playerId] = 0;
         socket.join(roomId);
 
+        // 1. أمر فتح شاشة اللعب والانتظار للاعب الذي انضم للتو
+        socket.emit('joined-successfully', { roomId: roomId });
+
+        // 2. تحديث قائمة الأسماء لجميع من في الغرفة
         io.to(roomId).emit('lobby-updated', Object.values(room.players).map(p => p.name));
 
-        if (room.playerOrder.length === 1) {
+        // 3. التحقق مما إذا اكتمل العدد (4 لاعبين) لبدء اللعبة
+        if (room.playerOrder.length === 4 && room.gameState === 'waiting') {
             room.gameState = 'playing';
-            io.to(roomId).emit('game-ready');
+            io.to(roomId).emit('game-ready'); // أمر إخفاء رسالة الانتظار وإظهار الطاولة
             startNewRound(roomId);
         }
     }
 
+    // بدء جولة جديدة وتوزيع الأوراق
     function startNewRound(roomId) {
         const room = rooms[roomId];
         let deck = shuffle(generateDeck());
         room.currentTrick = [];
         room.doubledCards = {};
         
+        // توزيع 13 ورقة لكل لاعب
         room.playerOrder.forEach((pid, index) => {
             room.hands[pid] = deck.slice(index * 13, (index + 1) * 13);
             room.scores[pid] = 0;
             io.to(room.players[pid].socketId).emit('receive-cards', room.hands[pid]);
         });
 
+        // تحديد صاحب المملكة وإرسال طلب اختيار العقد
         const kingId = room.playerOrder[room.kingIndex];
         io.to(room.players[kingId].socketId).emit('request-contract', room.playedContracts);
         io.to(roomId).emit('message', `بانتظار صاحب المملكة لاختيار العقد...`);
     }
 
+    // حدث اختيار العقد
     socket.on('select-contract', (data) => {
         const { roomId, contract, doubled } = data;
         const room = rooms[roomId];
         room.activeContract = contract;
         room.playedContracts.push(contract);
-        room.currentTurnIndex = room.kingIndex;
+        room.currentTurnIndex = room.kingIndex; // صاحب المملكة هو من يبدأ اللعب دائماً
         
         if (doubled) room.doubledCards = doubled;
 
@@ -145,31 +161,38 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('update-turn', room.playerOrder[room.currentTurnIndex]);
     });
 
+    // حدث رمي الورقة
     socket.on('play-card', (data) => {
         const { roomId, card, playerId } = data;
         const room = rooms[roomId];
 
+        // التحقق من أن الدور يعود للاعب الذي أرسل الطلب
         if (room.playerOrder[room.currentTurnIndex] !== playerId) return;
 
+        // إزالة الورقة من يد اللاعب
         room.hands[playerId] = room.hands[playerId].filter(c => !(c.suit === card.suit && c.value === card.value));
         room.currentTrick.push({ player: playerId, card: card });
         
         io.to(roomId).emit('card-played', { player: playerId, card: card });
 
+        // إذا اكتملت اللطشة (4 أوراق)
         if (room.currentTrick.length === 4) {
-            setTimeout(() => resolveTrick(roomId), 1500);
+            setTimeout(() => resolveTrick(roomId), 1500); // الانتظار ثانية ونصف ليرى اللاعبين الأوراق
         } else {
+            // انتقال الدور للاعب التالي
             room.currentTurnIndex = (room.currentTurnIndex + 1) % 4;
             io.to(roomId).emit('update-turn', room.playerOrder[room.currentTurnIndex]);
         }
     });
 
+    // حساب نتيجة اللطشة وتحديد من ربحها
     function resolveTrick(roomId) {
         const room = rooms[roomId];
         const leadingSuit = room.currentTrick[0].card.suit;
         let highestVal = -1;
         let winnerId = room.currentTrick[0].player;
 
+        // من وضع أعلى ورقة من نفس النوع الذي بُدئت به اللطشة؟
         room.currentTrick.forEach(item => {
             if (item.card.suit === leadingSuit && item.card.value > highestVal) {
                 highestVal = item.card.value;
@@ -178,24 +201,32 @@ io.on('connection', (socket) => {
         });
 
         let penalty = 0;
+        // حساب السالب (النقاط) بناءً على العقد الحالي
         room.currentTrick.forEach(item => {
             const cardKey = `${item.card.suit}-${item.card.value}`;
+            
             if (room.activeContract === 'king' && item.card.suit === '♥' && item.card.value === 14) {
-                penalty -= room.doubledCards[cardKey] ? 150 : 75;
+                penalty -= room.doubledCards[cardKey] ? 150 : 75; // شيخ الكبة
             }
             if (room.activeContract === 'queens' && item.card.value === 12) {
-                penalty -= room.doubledCards[cardKey] ? 50 : 25;
+                penalty -= room.doubledCards[cardKey] ? 50 : 25; // البنات
             }
-            if (room.activeContract === 'dinari' && item.card.suit === '♦') penalty -= 10;
+            if (room.activeContract === 'dinari' && item.card.suit === '♦') {
+                penalty -= 10; // الديناري
+            }
         });
-        if (room.activeContract === 'ltoo') penalty -= 15;
+        
+        if (room.activeContract === 'ltoo') {
+            penalty -= 15; // اللطوش
+        }
 
         room.scores[winnerId] += penalty;
         room.currentTrick = [];
-        room.currentTurnIndex = room.playerOrder.indexOf(winnerId);
+        room.currentTurnIndex = room.playerOrder.indexOf(winnerId); // الفائز باللطشة هو من يبدأ اللطشة القادمة
 
         io.to(roomId).emit('trick-resolved', { winner: winnerId, scores: room.scores });
 
+        // إذا انتهت أوراق اللاعبين (انتهت الجولة)
         if (room.hands[room.playerOrder[0]].length === 0) {
             handleRoundEnd(roomId);
         } else {
@@ -203,21 +234,27 @@ io.on('connection', (socket) => {
         }
     }
 
+    // إدارة نهاية الجولة ونهاية المملكة
     function handleRoundEnd(roomId) {
         const room = rooms[roomId];
+        
+        // تجميع نقاط الجولة في المجموع الكلي
         room.playerOrder.forEach(pid => room.totalScores[pid] += room.scores[pid]);
         
+        // إذا لُعبت الألعاب الخمسة في المملكة الحالية
         if (room.playedContracts.length === 5) {
-            room.kingIndex++;
+            room.kingIndex++; // انتقال المملكة للاعب التالي
             room.kingdomCount++;
-            room.playedContracts = [];
+            room.playedContracts = []; // تصفير قائمة الألعاب للمملكة الجديدة
         }
 
         io.to(roomId).emit('round-ended', room.totalScores);
 
+        // إذا اكتملت 4 ممالك (انتهت اللعبة بالكامل)
         if (room.kingdomCount === 4) {
             io.to(roomId).emit('game-over', room.totalScores);
         } else {
+            // بدء جولة جديدة بعد 3 ثوانٍ
             setTimeout(() => startNewRound(roomId), 10000);
         }
     }
